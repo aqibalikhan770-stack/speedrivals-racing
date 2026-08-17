@@ -113,7 +113,7 @@
   </div>
 </div>
 
-<script src="https://unpkg.com/mqtt@5/dist/mqtt.min.js"></script>
+<script src="https://unpkg.com/peerjs@1/dist/peerjs.min.js"></script>
 <script>
 (function(){
 'use strict';
@@ -200,14 +200,12 @@ let camX = 0, camY = 0;
 
 const hud = document.getElementById('hud');
 
-/* ================= MQTT (server-less multiplayer) ================= */
-const BROKERS = ['wss://broker.hivemq.com:8884/mqtt', 'wss://test.mosquitto.org:8081/mqtt'];
-let client = null;
-let onceConnected = false;
-let brokerIdx = 0;
-let roomTopic = null;
+/* ================= PeerJS (server-less multiplayer via WebRTC) ================= */
+let peer = null;
+let hostConn = null;      // non-host: connection to host
+let hostConns = {};       // host: peerId -> DataConnection
 let startSync = 0;
-let racers = {}; // race participants: id -> {name,color,time}
+let racers = {};          // race participants: id -> {name,color,time}
 
 function colorForId(id) {
   let h = 0;
@@ -222,115 +220,171 @@ function genCode(len) {
   return c;
 }
 
-function mqttPublish(topic, obj) {
-  if (client && connected) client.publish(topic, JSON.stringify(obj), { qos: 1 });
+function newPlayerObj(name, color) {
+  return { name: name || 'Player', color: color || COLORS[0], x: 0, y: 0, angle: 0, cp: 0, lap: 0, finished: false, finishTime: null };
 }
 
-function connectMqtt() {
-  client = mqtt.connect(BROKERS[brokerIdx], { clean: true, reconnectPeriod: 2000, connectTimeout: 8000 });
-  client.on('connect', () => {
-    connected = true;
-    onceConnected = true;
-    setupRoom();
-  });
-  client.on('error', () => {});
-  client.on('offline', () => {
-    connected = false;
-    if (!onceConnected && brokerIdx < BROKERS.length - 1) {
-      brokerIdx++;
-      try { client.end(true); } catch (e) {}
-      connectMqtt();
-    }
-  });
-  client.on('message', (topic, payload) => {
-    let m; try { m = JSON.parse(payload.toString()); } catch (e) { return; }
-    handleMqtt(topic, m);
-  });
-}
-
-function setupRoom() {
-  roomTopic = 'sr/' + roomCode;
-  client.subscribe(roomTopic + '/ctrl', { qos: 1 });
-  client.subscribe(roomTopic + '/state/+', { qos: 0 });
-  mqttPublish(roomTopic + '/ctrl', { t: 'join', id: myId, name: myName, host: isHost });
-  showGameUI();
-  startPresence();
-}
-
-function showGameUI() {
-  document.getElementById('menu').style.display = 'none';
-  hud.style.display = 'flex';
-  document.getElementById('roomLabel').textContent = 'Room ' + roomCode;
-  const startBtn = document.getElementById('startBtn');
-  startBtn.style.display = isHost ? 'inline-block' : 'none';
-  renderPlayers();
-  if ('ontouchstart' in window) document.getElementById('touch').style.display = 'block';
-}
-
-function touchPlayer(id) {
+function touchPlayer(id, name) {
   if (!players[id]) {
-    players[id] = { name: '...', color: colorForId(id), x: 0, y: 0, angle: 0, lastSeen: Date.now(), finished: false, finishTime: null };
+    players[id] = newPlayerObj(name, colorForId(id));
+    renderPlayers();
+  } else if (name && players[id].name === '...') {
+    players[id].name = name;
     renderPlayers();
   }
-}
-
-function handleMqtt(topic, m) {
-  if (!m || !m.t) return;
-
-  if (topic.indexOf('/state/') !== -1) {
-    const pid = topic.split('/').pop();
-    touchPlayer(pid);
-    const p = players[pid];
-    if (p) {
-      p.x = m.x; p.y = m.y; p.angle = m.angle; p.cp = m.cp; p.lap = m.lap;
-      p.lastSeen = Date.now();
-    }
-    return;
-  }
-
-  if (m.id) {
-    touchPlayer(m.id);
-    if (m.name && m.name !== '...') { players[m.id].name = m.name; }
-    players[m.id].lastSeen = Date.now();
-    if (m.id !== myId && m.t === 'join') {
-      mqttPublish(roomTopic + '/ctrl', { t: 'join', id: myId, name: myName, host: isHost });
-    }
-    renderPlayers();
-  }
-
-  if (m.t === 'start') {
-    if (!raceStarted) startRace(m.start || Date.now());
-  } else if (m.t === 'finish') {
-    if (players[m.id]) { players[m.id].finished = true; players[m.id].finishTime = m.time; }
-    if (racers[m.id]) racers[m.id].time = m.time;
-    checkRaceEnd();
-  }
-}
-
-function startPresence() {
-  setInterval(() => {
-    if (connected && roomTopic) {
-      mqttPublish(roomTopic + '/ctrl', { t: 'alive', id: myId, name: myName, host: isHost });
-    }
-  }, 2500);
-  setInterval(() => {
-    const now = Date.now();
-    for (const id in players) {
-      if (id === myId) continue;
-      if (now - players[id].lastSeen > 9000) {
-        delete players[id];
-        delete racers[id];
-        renderPlayers();
-      }
-    }
-    checkRaceEnd();
-  }, 2500);
 }
 
 function renderPlayers() {
   const box = document.getElementById('playersBox');
   box.innerHTML = 'Players: ' + Object.keys(players).length + '/8<br>' +
     Object.values(players).map((p) => '<span style="color:' + p.color + '">●</span> ' + p.name + (p.finished ? ' 🏁' : '')).join('<br>');
+}
+
+function showGameUI() {
+  document.getElementById('menu').style.display = 'none';
+  hud.style.display = 'flex';
+  document.getElementById('roomLabel').textContent = 'Room ' + roomCode;
+  document.getElementById('startBtn').style.display = isHost ? 'inline-block' : 'none';
+  renderPlayers();
+  if ('ontouchstart' in window) document.getElementById('touch').style.display = 'block';
+}
+
+/* ---- Host (room creator) ---- */
+function createRoom() {
+  isHost = true;
+  roomCode = genCode(5);
+  myColor = colorForId(myId);
+  players = {};
+  players[myId] = newPlayerObj(myName, myColor);
+  peer = new Peer('sr' + roomCode, { debug: 0 });
+  peer.on('open', () => {
+    connected = true;
+    showGameUI();
+  });
+  peer.on('connection', (conn) => {
+    hostConns[conn.peer] = conn;
+    conn.on('open', () => {
+      conn.on('data', (m) => hostOnData(conn, m));
+      conn.on('close', () => hostOnClose(conn));
+      conn.on('error', () => {});
+      conn.send({ t: 'roster', players: Object.keys(players).map((id) => ({ id, name: players[id].name })) });
+    });
+  });
+  peer.on('error', (err) => {
+    const msg = String(err.message || '');
+    if (msg.toLowerCase().indexOf('taken') !== -1 || err.type === 'unavailable-id') {
+      try { peer.destroy(); } catch (e) {}
+      createRoom();
+    } else {
+      document.getElementById('err').textContent = 'Connection problem: ' + err.type;
+    }
+  });
+}
+
+function hostOnData(conn, m) {
+  if (!m || !m.t) return;
+  if (m.t === 'join') {
+    conn._id = m.id;
+    touchPlayer(m.id, m.name);
+    broadcastToOthers(conn, { t: 'join', id: m.id, name: m.name });
+  } else if (m.t === 'state' && conn._id) {
+    touchPlayer(conn._id);
+    const p = players[conn._id];
+    if (p) { p.x = m.x; p.y = m.y; p.angle = m.angle; p.cp = m.cp; p.lap = m.lap; }
+    broadcastToOthers(conn, { t: 'state', id: conn._id, x: m.x, y: m.y, angle: m.angle, lap: m.lap, cp: m.cp });
+  } else if (m.t === 'finish' && conn._id) {
+    if (players[conn._id]) players[conn._id].finished = true;
+    if (racers[conn._id]) racers[conn._id].time = m.time;
+    broadcastToOthers(conn, { t: 'finish', id: conn._id, time: m.time });
+    checkRaceEnd();
+  }
+}
+
+function broadcastToOthers(fromConn, msg) {
+  for (const c of Object.values(hostConns)) {
+    if (c !== fromConn && c.open) c.send(msg);
+  }
+}
+
+function hostOnClose(conn) {
+  delete hostConns[conn.peer];
+  if (conn._id) {
+    delete players[conn._id];
+    delete racers[conn._id];
+    broadcastToOthers(null, { t: 'leave', id: conn._id });
+    renderPlayers();
+    checkRaceEnd();
+  }
+}
+
+/* ---- Non-host (joiner) ---- */
+function joinRoom(code) {
+  const name = defaultName();
+  localStorage.setItem('sr_name', name);
+  myName = name;
+  isHost = false;
+  roomCode = String(code || '').toUpperCase();
+  myColor = colorForId(myId);
+  players = {};
+  players[myId] = newPlayerObj(myName, myColor);
+  if (peer) { try { peer.destroy(); } catch (e) {} }
+  peer = new Peer({ debug: 0 });
+  peer.on('open', () => {
+    hostConn = peer.connect('sr' + roomCode, { reliable: true, serialization: 'json' });
+    hostConn.on('open', () => {
+      connected = true;
+      showGameUI();
+      hostConn.send({ t: 'join', id: myId, name: myName });
+    });
+    hostConn.on('data', (m) => nonHostOnData(m));
+    hostConn.on('close', () => {
+      connected = false;
+      hostConn = null;
+      setTimeout(() => { if (!raceEnded) joinRoom(roomCode); }, 1500);
+    });
+    hostConn.on('error', () => {});
+  });
+  peer.on('error', (err) => {
+    document.getElementById('err').textContent = err.type === 'peer-unavailable'
+      ? 'Host online nahi hai ya code galat hai.'
+      : 'Connection problem: ' + err.type;
+  });
+}
+
+function nonHostOnData(m) {
+  if (!m || !m.t) return;
+  switch (m.t) {
+    case 'roster': {
+      players = {};
+      players[myId] = newPlayerObj(myName, myColor);
+      m.players.forEach((p) => { if (p.id !== myId) players[p.id] = newPlayerObj(p.name, colorForId(p.id)); });
+      if (hostConn && hostConn.open) hostConn.send({ t: 'join', id: myId, name: myName });
+      renderPlayers();
+      break;
+    }
+    case 'join':
+      touchPlayer(m.id, m.name);
+      renderPlayers();
+      break;
+    case 'leave':
+      delete players[m.id];
+      delete racers[m.id];
+      renderPlayers();
+      break;
+    case 'state': {
+      const p = players[m.id];
+      if (p) { p.x = m.x; p.y = m.y; p.angle = m.angle; p.cp = m.cp; p.lap = m.lap; }
+      break;
+    }
+    case 'start':
+      if (!raceStarted) startRace(m.start || Date.now());
+      break;
+    case 'finish':
+      if (players[m.id]) { players[m.id].finished = true; players[m.id].finishTime = m.time; }
+      if (racers[m.id]) racers[m.id].time = m.time;
+      checkRaceEnd();
+      break;
+  }
 }
 
 function startRace(startTs) {
@@ -457,8 +511,12 @@ function finishLocal() {
   me.finished = true;
   if (!me.finishSent) {
     me.finishSent = true;
-    mqttPublish(roomTopic + '/ctrl', { t: 'finish', id: myId, time: me.time });
-    if (racers[myId]) racers[myId].time = me.time;
+    if (isHost) {
+      if (racers[myId]) racers[myId].time = me.time;
+      broadcastToOthers(null, { t: 'finish', id: myId, time: me.time });
+    } else if (hostConn && hostConn.open) {
+      hostConn.send({ t: 'finish', time: me.time });
+    }
     checkRaceEnd();
   }
 }
@@ -480,10 +538,13 @@ function myRank() {
 /* ================= Network ================= */
 let lastPub = 0;
 function sendState(now) {
-  if (!connected || !roomTopic) return;
   if (now - lastPub < 33) return;
   lastPub = now;
-  client.publish(roomTopic + '/state/' + myId, JSON.stringify({ x: me.x, y: me.y, angle: me.angle, lap: me.lap, cp: me.cp }), { qos: 0 });
+  if (isHost) {
+    broadcastToOthers(null, { t: 'state', id: myId, x: me.x, y: me.y, angle: me.angle, lap: me.lap, cp: me.cp });
+  } else if (hostConn && hostConn.open) {
+    hostConn.send({ t: 'state', x: me.x, y: me.y, angle: me.angle, lap: me.lap, cp: me.cp });
+  }
 }
 
 /* ================= Render ================= */
@@ -895,11 +956,8 @@ document.getElementById('createBtn').addEventListener('click', () => {
   const name = defaultName();
   localStorage.setItem('sr_name', name);
   myName = name;
-  myColor = colorForId(myId);
-  roomCode = genCode(5);
-  isHost = true;
   document.getElementById('err').textContent = '';
-  connectMqtt();
+  createRoom();
 });
 
 document.getElementById('joinBtn').addEventListener('click', () => {
@@ -907,17 +965,6 @@ document.getElementById('joinBtn').addEventListener('click', () => {
   if (!code) { document.getElementById('err').textContent = 'Room code likhein.'; return; }
   joinRoom(code);
 });
-
-function joinRoom(code) {
-  const name = defaultName();
-  localStorage.setItem('sr_name', name);
-  myName = name;
-  myColor = colorForId(myId);
-  roomCode = code;
-  isHost = false;
-  document.getElementById('err').textContent = '';
-  connectMqtt();
-}
 
 document.getElementById('copyBtn').addEventListener('click', () => {
   const link = getLink();
@@ -937,9 +984,9 @@ document.getElementById('copyBtn').addEventListener('click', () => {
 });
 
 document.getElementById('startBtn').addEventListener('click', () => {
-  if (!connected || !roomTopic) return;
+  if (!peer || !isHost) return;
   const startTs = Date.now();
-  mqttPublish(roomTopic + '/ctrl', { t: 'start', id: myId, start: startTs });
+  broadcastToOthers(null, { t: 'start', start: startTs });
   if (!raceStarted) startRace(startTs);
   document.getElementById('startBtn').style.display = 'none';
 });
