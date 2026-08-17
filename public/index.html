@@ -113,6 +113,7 @@
   </div>
 </div>
 
+<script src="https://unpkg.com/mqtt@5/dist/mqtt.min.js"></script>
 <script>
 (function(){
 'use strict';
@@ -187,10 +188,11 @@ function bindBtn(id, k) {
 bindBtn('btnL','left'); bindBtn('btnR','right');
 bindBtn('btnU','up'); bindBtn('btnD','down');
 
-let ws = null, connected = false;
-let myId = null, myColor = COLORS[0], myName = 'Player', roomCode = null, isHost = false;
+let connected = false;
+const myId = 'p' + Math.random().toString(36).slice(2, 9);
+let myColor = COLORS[0], myName = 'Player', roomCode = null, isHost = false;
 let raceStarted = false, raceEnded = false, goTime = 0;
-let players = {}; // id -> {name,color,x,y,angle,finished}
+let players = {}; // id -> {name,color,x,y,angle,lastSeen,finished,finishTime}
 
 const me = { x: 0, y: 0, angle: 0, speed: 0, lap: 0, cp: 0, finished: false, finishSent: false, time: 0 };
 
@@ -198,89 +200,161 @@ let camX = 0, camY = 0;
 
 const hud = document.getElementById('hud');
 
-/* ================= Connection ================= */
-function connect(onOpen) {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(proto + '//' + location.host + '/ws');
-  ws.onopen = () => { connected = true; if (onOpen) onOpen(); };
-  ws.onclose = () => {
-    if (raceStarted && !raceEnded) showResults([], 'Connection lost. Refresh karo.');
-  };
-  ws.onmessage = (e) => {
-    let msg; try { msg = JSON.parse(e.data); } catch (err) { return; }
-    handleMsg(msg);
-  };
-}
-function sendObj(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+/* ================= MQTT (server-less multiplayer) ================= */
+const BROKERS = ['wss://broker.hivemq.com:8884/mqtt', 'wss://test.mosquitto.org:8081/mqtt'];
+let client = null;
+let onceConnected = false;
+let brokerIdx = 0;
+let roomTopic = null;
+let startSync = 0;
+let racers = {}; // race participants: id -> {name,color,time}
 
-function handleMsg(msg) {
-  switch (msg.type) {
-    case 'joined': {
-      myId = msg.id;
-      myColor = msg.color;
-      roomCode = msg.room;
-      isHost = msg.host;
-      players = {};
-      msg.players.forEach((p) => { players[p.id] = { name: p.name, color: p.color, x: 0, y: 0, angle: 0, finished: false }; });
-      document.getElementById('menu').style.display = 'none';
-      hud.style.display = 'flex';
-      document.getElementById('roomLabel').textContent = 'Room ' + roomCode;
-      const startBtn = document.getElementById('startBtn');
-      startBtn.style.display = isHost ? 'inline-block' : 'none';
-      renderPlayers();
-      if ('ontouchstart' in window) document.getElementById('touch').style.display = 'block';
-      break;
+function colorForId(id) {
+  let h = 0;
+  for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return COLORS[h % COLORS.length];
+}
+
+function genCode(len) {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let c = '';
+  for (let i = 0; i < len; i++) c += chars[Math.floor(Math.random() * chars.length)];
+  return c;
+}
+
+function mqttPublish(topic, obj) {
+  if (client && connected) client.publish(topic, JSON.stringify(obj), { qos: 1 });
+}
+
+function connectMqtt() {
+  client = mqtt.connect(BROKERS[brokerIdx], { clean: true, reconnectPeriod: 2000, connectTimeout: 8000 });
+  client.on('connect', () => {
+    connected = true;
+    onceConnected = true;
+    setupRoom();
+  });
+  client.on('error', () => {});
+  client.on('offline', () => {
+    connected = false;
+    if (!onceConnected && brokerIdx < BROKERS.length - 1) {
+      brokerIdx++;
+      try { client.end(true); } catch (e) {}
+      connectMqtt();
     }
-    case 'player_join': {
-      players[msg.player.id] = { name: msg.player.name, color: msg.player.color, x: 0, y: 0, angle: 0, finished: false };
-      renderPlayers();
-      break;
-    }
-    case 'player_leave': {
-      delete players[msg.id];
-      renderPlayers();
-      break;
-    }
-    case 'new_host': {
-      isHost = msg.id === myId;
-      document.getElementById('startBtn').style.display = isHost ? 'inline-block' : 'none';
-      break;
-    }
-    case 'error': {
-      document.getElementById('err').textContent = msg.message;
-      break;
-    }
-    case 'race_start': {
-      raceStarted = true;
-      goTime = Date.now() + 3000;
-      spawn();
-      runCountdown();
-      document.getElementById('startBtn').style.display = 'none';
-      break;
-    }
-    case 'state': {
-      msg.players.forEach((p) => {
-        const r = players[p.id];
-        if (!r) return;
-        r.x = p.x; r.y = p.y; r.angle = p.angle; r.finished = p.finished;
-      });
-      break;
-    }
-    case 'player_finish': {
-      if (players[msg.id]) players[msg.id].finished = true;
-      break;
-    }
-    case 'race_end': {
-      showResults(msg.standings);
-      break;
-    }
+  });
+  client.on('message', (topic, payload) => {
+    let m; try { m = JSON.parse(payload.toString()); } catch (e) { return; }
+    handleMqtt(topic, m);
+  });
+}
+
+function setupRoom() {
+  roomTopic = 'sr/' + roomCode;
+  client.subscribe(roomTopic + '/ctrl', { qos: 1 });
+  client.subscribe(roomTopic + '/state/+', { qos: 0 });
+  mqttPublish(roomTopic + '/ctrl', { t: 'join', id: myId, name: myName, host: isHost });
+  showGameUI();
+  startPresence();
+}
+
+function showGameUI() {
+  document.getElementById('menu').style.display = 'none';
+  hud.style.display = 'flex';
+  document.getElementById('roomLabel').textContent = 'Room ' + roomCode;
+  const startBtn = document.getElementById('startBtn');
+  startBtn.style.display = isHost ? 'inline-block' : 'none';
+  renderPlayers();
+  if ('ontouchstart' in window) document.getElementById('touch').style.display = 'block';
+}
+
+function touchPlayer(id) {
+  if (!players[id]) {
+    players[id] = { name: '...', color: colorForId(id), x: 0, y: 0, angle: 0, lastSeen: Date.now(), finished: false, finishTime: null };
+    renderPlayers();
   }
+}
+
+function handleMqtt(topic, m) {
+  if (!m || !m.t) return;
+
+  if (topic.indexOf('/state/') !== -1) {
+    const pid = topic.split('/').pop();
+    touchPlayer(pid);
+    const p = players[pid];
+    if (p) {
+      p.x = m.x; p.y = m.y; p.angle = m.angle; p.cp = m.cp; p.lap = m.lap;
+      p.lastSeen = Date.now();
+    }
+    return;
+  }
+
+  if (m.id) {
+    touchPlayer(m.id);
+    if (m.name && m.name !== '...') { players[m.id].name = m.name; }
+    players[m.id].lastSeen = Date.now();
+    if (m.id !== myId && m.t === 'join') {
+      mqttPublish(roomTopic + '/ctrl', { t: 'join', id: myId, name: myName, host: isHost });
+    }
+    renderPlayers();
+  }
+
+  if (m.t === 'start') {
+    if (!raceStarted) startRace(m.start || Date.now());
+  } else if (m.t === 'finish') {
+    if (players[m.id]) { players[m.id].finished = true; players[m.id].finishTime = m.time; }
+    if (racers[m.id]) racers[m.id].time = m.time;
+    checkRaceEnd();
+  }
+}
+
+function startPresence() {
+  setInterval(() => {
+    if (connected && roomTopic) {
+      mqttPublish(roomTopic + '/ctrl', { t: 'alive', id: myId, name: myName, host: isHost });
+    }
+  }, 2500);
+  setInterval(() => {
+    const now = Date.now();
+    for (const id in players) {
+      if (id === myId) continue;
+      if (now - players[id].lastSeen > 9000) {
+        delete players[id];
+        delete racers[id];
+        renderPlayers();
+      }
+    }
+    checkRaceEnd();
+  }, 2500);
 }
 
 function renderPlayers() {
   const box = document.getElementById('playersBox');
   box.innerHTML = 'Players: ' + Object.keys(players).length + '/8<br>' +
-    Object.values(players).map((p) => '<span style="color:' + p.color + '">●</span> ' + p.name).join('<br>');
+    Object.values(players).map((p) => '<span style="color:' + p.color + '">●</span> ' + p.name + (p.finished ? ' 🏁' : '')).join('<br>');
+}
+
+function startRace(startTs) {
+  raceStarted = true;
+  raceEnded = false;
+  startSync = startTs || Date.now();
+  goTime = startSync + 3000;
+  racers = {};
+  for (const id in players) racers[id] = { name: players[id].name, color: players[id].color, time: null };
+  spawn();
+  runCountdown();
+  document.getElementById('startBtn').style.display = 'none';
+}
+
+function checkRaceEnd() {
+  if (!raceStarted || raceEnded) return;
+  const ids = Object.keys(racers);
+  if (ids.length === 0) return;
+  if (ids.every((id) => racers[id].time !== null)) {
+    const standings = ids
+      .map((id) => ({ name: racers[id].name, color: racers[id].color, time: racers[id].time }))
+      .sort((a, b) => a.time - b.time);
+    showResults(standings);
+  }
 }
 
 /* ================= Spawn ================= */
@@ -383,7 +457,9 @@ function finishLocal() {
   me.finished = true;
   if (!me.finishSent) {
     me.finishSent = true;
-    sendObj({ type: 'finish', time: me.time });
+    mqttPublish(roomTopic + '/ctrl', { t: 'finish', id: myId, time: me.time });
+    if (racers[myId]) racers[myId].time = me.time;
+    checkRaceEnd();
   }
 }
 
@@ -402,8 +478,12 @@ function myRank() {
 }
 
 /* ================= Network ================= */
-function sendState() {
-  sendObj({ type: 'state', x: me.x, y: me.y, angle: me.angle, speed: me.speed, lap: me.lap, cp: me.cp });
+let lastPub = 0;
+function sendState(now) {
+  if (!connected || !roomTopic) return;
+  if (now - lastPub < 33) return;
+  lastPub = now;
+  client.publish(roomTopic + '/state/' + myId, JSON.stringify({ x: me.x, y: me.y, angle: me.angle, lap: me.lap, cp: me.cp }), { qos: 0 });
 }
 
 /* ================= Render ================= */
@@ -795,7 +875,7 @@ function loop(now) {
     acc -= STEP;
   }
   render();
-  if (raceStarted && !raceEnded && !me.finished) sendState();
+  if (raceStarted && !raceEnded && !me.finished) sendState(now);
 }
 requestAnimationFrame(loop);
 
@@ -807,24 +887,37 @@ function getLink() {
   return location.origin + location.pathname + '#room=' + roomCode;
 }
 
+function defaultName() {
+  return nameInput.value.trim() || 'Player' + Math.floor(Math.random() * 90 + 10);
+}
+
 document.getElementById('createBtn').addEventListener('click', () => {
-  const name = nameInput.value.trim() || 'Player' + Math.floor(Math.random() * 90 + 10);
+  const name = defaultName();
   localStorage.setItem('sr_name', name);
   myName = name;
+  myColor = colorForId(myId);
+  roomCode = genCode(5);
+  isHost = true;
   document.getElementById('err').textContent = '';
-  connect(() => sendObj({ type: 'create', name: myName }));
-  roomCode = '...';
+  connectMqtt();
 });
 
 document.getElementById('joinBtn').addEventListener('click', () => {
   const code = document.getElementById('roomInput').value.trim().toUpperCase();
-  const name = nameInput.value.trim() || 'Player' + Math.floor(Math.random() * 90 + 10);
   if (!code) { document.getElementById('err').textContent = 'Room code likhein.'; return; }
+  joinRoom(code);
+});
+
+function joinRoom(code) {
+  const name = defaultName();
   localStorage.setItem('sr_name', name);
   myName = name;
-  connect(() => sendObj({ type: 'join', room: code, name: myName }));
+  myColor = colorForId(myId);
   roomCode = code;
-});
+  isHost = false;
+  document.getElementById('err').textContent = '';
+  connectMqtt();
+}
 
 document.getElementById('copyBtn').addEventListener('click', () => {
   const link = getLink();
@@ -844,14 +937,17 @@ document.getElementById('copyBtn').addEventListener('click', () => {
 });
 
 document.getElementById('startBtn').addEventListener('click', () => {
-  sendObj({ type: 'start' });
+  if (!connected || !roomTopic) return;
+  const startTs = Date.now();
+  mqttPublish(roomTopic + '/ctrl', { t: 'start', id: myId, start: startTs });
+  if (!raceStarted) startRace(startTs);
   document.getElementById('startBtn').style.display = 'none';
 });
 
-const hashRoom = (location.hash.match(/room=([A-Za-z0-9]{4})/) || [])[1];
+const hashRoom = (location.hash.match(/room=([A-Za-z0-9]{4,6})/) || [])[1];
 if (hashRoom) {
   document.getElementById('roomInput').value = hashRoom.toUpperCase();
-  document.getElementById('createBtn').textContent = 'Join Room: ' + hashRoom.toUpperCase();
+  joinRoom(hashRoom.toUpperCase());
 }
 
 })();
