@@ -1,0 +1,956 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>SpeedRivals - Multiplayer Racing</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-user-select: none; user-select: none; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: radial-gradient(1200px 700px at 20% 10%, #16212e, #0b1118); font-family: 'Segoe UI', Arial, sans-serif; color: #fff; }
+  canvas { display: block; }
+
+  .overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(8,12,18,0.92); z-index: 20; }
+  .panel { width: 92%; max-width: 420px; background: linear-gradient(160deg, rgba(30,40,55,0.95), rgba(18,25,35,0.98)); border: 1px solid rgba(255,213,79,0.25); border-radius: 18px; padding: 30px 26px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.06); }
+  .panel h1 { font-size: 32px; letter-spacing: 1px; background: linear-gradient(135deg, #ffe27a, #ffb300); -webkit-background-clip: text; background-clip: text; color: transparent; margin-bottom: 4px; font-weight: 900; }
+  .panel .sub { color: #9db2cc; font-size: 14px; margin-bottom: 20px; }
+  .panel input { width: 100%; padding: 12px 14px; border-radius: 11px; border: 1px solid #33445c; background: rgba(13,19,28,0.9); color: #fff; font-size: 16px; margin-bottom: 12px; outline: none; transition: border-color .2s; }
+  .panel input:focus { border-color: #ffd54f; box-shadow: 0 0 0 3px rgba(255,213,79,0.15); }
+  .btn { width: 100%; padding: 13px; border: none; border-radius: 11px; font-size: 16px; font-weight: 700; cursor: pointer; margin-top: 8px; color: #0f141a; transition: transform .1s, filter .2s; }
+  .btn:hover { transform: translateY(-1px); filter: brightness(1.05); }
+  .btn:active { transform: translateY(0); }
+  .btn.primary { background: linear-gradient(135deg, #ffd54f, #ffb300); box-shadow: 0 6px 20px rgba(255,179,0,0.3); }
+  .btn.secondary { background: #2c3a4d; color: #fff; }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+  .row { display: flex; gap: 8px; margin-top: 10px; }
+  .row .btn { margin-top: 0; width: 110px; flex-shrink: 0; }
+  .err { color: #ff6b6b; font-size: 13px; min-height: 18px; margin-top: 8px; }
+  .hint { color: #8fa3bd; font-size: 12px; margin-top: 14px; line-height: 1.6; }
+  .hint b { color: #ffd54f; }
+
+  /* HUD */
+  #hud { position: fixed; top: 0; left: 0; right: 0; padding: 12px 14px; display: flex; justify-content: space-between; align-items: flex-start; z-index: 10; pointer-events: none; font-size: 14px; }
+  #hud .box { background: rgba(10,15,22,0.75); border: 1px solid rgba(255,213,79,0.15); border-radius: 12px; padding: 8px 14px; pointer-events: auto; backdrop-filter: blur(8px); box-shadow: 0 6px 18px rgba(0,0,0,0.35); }
+  #hud .label { color: #8fa3bd; font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; }
+  #hud .val { font-size: 20px; font-weight: 800; color: #ffd54f; text-shadow: 0 2px 8px rgba(255,213,79,0.3); }
+  .hud-right { text-align: right; }
+  #copyBtn { margin-top: 6px; font-size: 12px; padding: 6px 12px; background: #2c3a4d; color: #fff; border: none; border-radius: 8px; cursor: pointer; pointer-events: auto; transition: background .2s; }
+  #copyBtn:hover { background: #3a4d66; }
+  #startBtn { margin-top: 8px; font-size: 14px; padding: 9px 18px; background: linear-gradient(135deg, #ffd54f, #ffb300); color: #0f141a; border: none; border-radius: 9px; cursor: pointer; font-weight: 800; pointer-events: auto; box-shadow: 0 6px 18px rgba(255,179,0,0.35); }
+  #playersBox { margin-top: 6px; font-size: 12px; color: #cfe0f3; max-width: 190px; line-height: 1.7; text-align: left; }
+
+  /* GO overlay */
+  #goOverlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; z-index: 15; pointer-events: none; }
+  #goOverlay .txt { font-size: 90px; font-weight: 900; color: #ffd54f; text-shadow: 0 0 30px rgba(255,213,79,.5); }
+
+  /* Touch controls */
+  #touch { position: fixed; inset: 0; z-index: 5; pointer-events: none; display: none; }
+  #touch .tbtn { position: absolute; width: 84px; height: 84px; border-radius: 50%; background: rgba(255,255,255,0.12); border: 2px solid rgba(255,255,255,0.25); color: #fff; font-size: 26px; display: flex; align-items: center; justify-content: center; pointer-events: auto; touch-action: none; }
+  #btnL { left: 20px; bottom: 30px; }
+  #btnR { left: 118px; bottom: 30px; }
+  #btnD { right: 118px; bottom: 30px; }
+  #btnU { right: 20px; bottom: 30px; }
+</style>
+</head>
+<body>
+
+<canvas id="game"></canvas>
+
+<div id="goOverlay"><div class="txt" id="goTxt">3</div></div>
+
+<div id="touch">
+  <div class="tbtn" id="btnL">◀</div>
+  <div class="tbtn" id="btnR">▶</div>
+  <div class="tbtn" id="btnU">▲</div>
+  <div class="tbtn" id="btnD">▼</div>
+</div>
+
+<div id="hud" style="display:none">
+  <div>
+    <div class="box">
+      <div class="label">Lap</div>
+      <div class="val" id="hudLap">1 / 3</div>
+    </div>
+    <div class="box" style="margin-top:6px">
+      <div class="label">Position</div>
+      <div class="val" id="hudPos">1</div>
+    </div>
+  </div>
+  <div class="hud-right">
+    <div class="box">
+      <div class="label">Time</div>
+      <div class="val" id="hudTime">0.0s</div>
+    </div>
+    <div class="box" style="margin-top:6px">
+      <div class="label" id="roomLabel">Room</div>
+      <button id="copyBtn">Copy Link</button>
+      <div id="playersBox"></div>
+      <button id="startBtn" style="display:none">Start Race</button>
+    </div>
+  </div>
+</div>
+
+<div id="menu" class="overlay">
+  <div class="panel">
+    <h1>🏁 SPEEDRIVALS</h1>
+    <div class="sub">Multiplayer Racing — link share karo, dost race karein</div>
+    <input id="nameInput" maxlength="14" placeholder="Apna naam likhein...">
+    <button class="btn primary" id="createBtn">New Room Banayein</button>
+    <div class="row">
+      <input id="roomInput" maxlength="4" placeholder="Room Code" style="text-transform:uppercase">
+      <button class="btn secondary" id="joinBtn">Join</button>
+    </div>
+    <div class="err" id="err"></div>
+    <div class="hint">Controls: W / ↑ = gas · S / ↓ = brake · A/D or ←/→ = steer<br>
+    Host "Start Race" dabaye, sab ek saath race shuru karenge. 3 laps — pehle finish, jitna!</div>
+  </div>
+</div>
+
+<div id="results" class="overlay" style="display:none">
+  <div class="panel">
+    <h1 id="resTitle">🏁 FINISH</h1>
+    <div id="resList" style="text-align:left; margin:16px 0"></div>
+    <button class="btn primary" onclick="location.reload()">Dobara Khelo</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/mqtt@5/dist/mqtt.min.js"></script>
+<script>
+(function(){
+'use strict';
+
+/* ================= Config ================= */
+const LAPS = 3;
+const ROAD_W = 200;
+const ROAD_HALF = ROAD_W / 2;
+const COLORS = ['#ff5252','#4caf50','#2196f3','#ff9800','#9c27b0','#00bcd4','#ffeb3b','#e91e63'];
+
+const TRACK = [
+  [400, 420], [1250, 350], [2050, 430], [2650, 900], [2350, 1500],
+  [1750, 1850], [950, 1860], [380, 1500], [260, 900]
+];
+
+/* ================= Canvas ================= */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+function resize() {
+  canvas.width = window.innerWidth * DPR;
+  canvas.height = window.innerHeight * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ================= Track geometry ================= */
+const SEGS = [];
+for (let i = 0; i < TRACK.length; i++) {
+  const a = TRACK[i], b = TRACK[(i + 1) % TRACK.length];
+  SEGS.push([a, b]);
+}
+
+function distToSeg(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const cx = ax + t * dx, cy = ay + t * dy;
+  return Math.hypot(px - cx, py - cy);
+}
+
+function minDistToTrack(px, py) {
+  let best = Infinity;
+  for (const [a, b] of SEGS) {
+    const d = distToSeg(px, py, a[0], a[1], b[0], b[1]);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+/* ================= State ================= */
+const keys = {};
+window.addEventListener('keydown', (e) => {
+  const k = e.key.toLowerCase();
+  keys[k] = true;
+  if (['arrowup','arrowdown','arrowleft','arrowright',' '].includes(k)) e.preventDefault();
+});
+window.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
+
+function bindBtn(id, k) {
+  const el = document.getElementById(id);
+  const on = (e) => { e.preventDefault(); keys[k] = true; };
+  const off = () => { keys[k] = false; };
+  el.addEventListener('pointerdown', on);
+  el.addEventListener('pointerup', off);
+  el.addEventListener('pointerleave', off);
+  el.addEventListener('pointercancel', off);
+}
+bindBtn('btnL','left'); bindBtn('btnR','right');
+bindBtn('btnU','up'); bindBtn('btnD','down');
+
+let connected = false;
+const myId = 'p' + Math.random().toString(36).slice(2, 9);
+let myColor = COLORS[0], myName = 'Player', roomCode = null, isHost = false;
+let raceStarted = false, raceEnded = false, goTime = 0;
+let players = {}; // id -> {name,color,x,y,angle,lastSeen,finished,finishTime}
+
+const me = { x: 0, y: 0, angle: 0, speed: 0, lap: 0, cp: 0, finished: false, finishSent: false, time: 0 };
+
+let camX = 0, camY = 0;
+
+const hud = document.getElementById('hud');
+
+/* ================= MQTT (server-less multiplayer) ================= */
+const BROKERS = ['wss://broker.hivemq.com:8884/mqtt', 'wss://test.mosquitto.org:8081/mqtt'];
+let client = null;
+let onceConnected = false;
+let brokerIdx = 0;
+let roomTopic = null;
+let startSync = 0;
+let racers = {}; // race participants: id -> {name,color,time}
+
+function colorForId(id) {
+  let h = 0;
+  for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return COLORS[h % COLORS.length];
+}
+
+function genCode(len) {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let c = '';
+  for (let i = 0; i < len; i++) c += chars[Math.floor(Math.random() * chars.length)];
+  return c;
+}
+
+function mqttPublish(topic, obj) {
+  if (client && connected) client.publish(topic, JSON.stringify(obj), { qos: 1 });
+}
+
+function connectMqtt() {
+  client = mqtt.connect(BROKERS[brokerIdx], { clean: true, reconnectPeriod: 2000, connectTimeout: 8000 });
+  client.on('connect', () => {
+    connected = true;
+    onceConnected = true;
+    setupRoom();
+  });
+  client.on('error', () => {});
+  client.on('offline', () => {
+    connected = false;
+    if (!onceConnected && brokerIdx < BROKERS.length - 1) {
+      brokerIdx++;
+      try { client.end(true); } catch (e) {}
+      connectMqtt();
+    }
+  });
+  client.on('message', (topic, payload) => {
+    let m; try { m = JSON.parse(payload.toString()); } catch (e) { return; }
+    handleMqtt(topic, m);
+  });
+}
+
+function setupRoom() {
+  roomTopic = 'sr/' + roomCode;
+  client.subscribe(roomTopic + '/ctrl', { qos: 1 });
+  client.subscribe(roomTopic + '/state/+', { qos: 0 });
+  mqttPublish(roomTopic + '/ctrl', { t: 'join', id: myId, name: myName, host: isHost });
+  showGameUI();
+  startPresence();
+}
+
+function showGameUI() {
+  document.getElementById('menu').style.display = 'none';
+  hud.style.display = 'flex';
+  document.getElementById('roomLabel').textContent = 'Room ' + roomCode;
+  const startBtn = document.getElementById('startBtn');
+  startBtn.style.display = isHost ? 'inline-block' : 'none';
+  renderPlayers();
+  if ('ontouchstart' in window) document.getElementById('touch').style.display = 'block';
+}
+
+function touchPlayer(id) {
+  if (!players[id]) {
+    players[id] = { name: '...', color: colorForId(id), x: 0, y: 0, angle: 0, lastSeen: Date.now(), finished: false, finishTime: null };
+    renderPlayers();
+  }
+}
+
+function handleMqtt(topic, m) {
+  if (!m || !m.t) return;
+
+  if (topic.indexOf('/state/') !== -1) {
+    const pid = topic.split('/').pop();
+    touchPlayer(pid);
+    const p = players[pid];
+    if (p) {
+      p.x = m.x; p.y = m.y; p.angle = m.angle; p.cp = m.cp; p.lap = m.lap;
+      p.lastSeen = Date.now();
+    }
+    return;
+  }
+
+  if (m.id) {
+    touchPlayer(m.id);
+    if (m.name && m.name !== '...') { players[m.id].name = m.name; }
+    players[m.id].lastSeen = Date.now();
+    if (m.id !== myId && m.t === 'join') {
+      mqttPublish(roomTopic + '/ctrl', { t: 'join', id: myId, name: myName, host: isHost });
+    }
+    renderPlayers();
+  }
+
+  if (m.t === 'start') {
+    if (!raceStarted) startRace(m.start || Date.now());
+  } else if (m.t === 'finish') {
+    if (players[m.id]) { players[m.id].finished = true; players[m.id].finishTime = m.time; }
+    if (racers[m.id]) racers[m.id].time = m.time;
+    checkRaceEnd();
+  }
+}
+
+function startPresence() {
+  setInterval(() => {
+    if (connected && roomTopic) {
+      mqttPublish(roomTopic + '/ctrl', { t: 'alive', id: myId, name: myName, host: isHost });
+    }
+  }, 2500);
+  setInterval(() => {
+    const now = Date.now();
+    for (const id in players) {
+      if (id === myId) continue;
+      if (now - players[id].lastSeen > 9000) {
+        delete players[id];
+        delete racers[id];
+        renderPlayers();
+      }
+    }
+    checkRaceEnd();
+  }, 2500);
+}
+
+function renderPlayers() {
+  const box = document.getElementById('playersBox');
+  box.innerHTML = 'Players: ' + Object.keys(players).length + '/8<br>' +
+    Object.values(players).map((p) => '<span style="color:' + p.color + '">●</span> ' + p.name + (p.finished ? ' 🏁' : '')).join('<br>');
+}
+
+function startRace(startTs) {
+  raceStarted = true;
+  raceEnded = false;
+  startSync = startTs || Date.now();
+  goTime = startSync + 3000;
+  racers = {};
+  for (const id in players) racers[id] = { name: players[id].name, color: players[id].color, time: null };
+  spawn();
+  runCountdown();
+  document.getElementById('startBtn').style.display = 'none';
+}
+
+function checkRaceEnd() {
+  if (!raceStarted || raceEnded) return;
+  const ids = Object.keys(racers);
+  if (ids.length === 0) return;
+  if (ids.every((id) => racers[id].time !== null)) {
+    const standings = ids
+      .map((id) => ({ name: racers[id].name, color: racers[id].color, time: racers[id].time }))
+      .sort((a, b) => a.time - b.time);
+    showResults(standings);
+  }
+}
+
+/* ================= Spawn ================= */
+function myIndex() {
+  let i = 0;
+  for (const id in players) { if (id === myId) return i; i++; }
+  return 0;
+}
+
+function spawn() {
+  const n = Object.keys(players).length;
+  const off = (myIndex() - (n - 1) / 2) * 60;
+  const [sx, sy] = TRACK[0];
+  const [tx, ty] = TRACK[1];
+  let dx = tx - sx, dy = ty - sy;
+  const len = Math.hypot(dx, dy);
+  dx /= len; dy /= len;
+  const px = -dy, py = dx;
+  me.x = sx + px * off;
+  me.y = sy + py * off;
+  me.angle = Math.atan2(dy, dx);
+  me.speed = 0; me.lap = 0; me.cp = 0;
+  me.finished = false; me.finishSent = false; me.time = 0;
+  camX = me.x; camY = me.y;
+}
+
+function runCountdown() {
+  const ov = document.getElementById('goOverlay');
+  const txt = document.getElementById('goTxt');
+  const steps = ['3', '2', '1', 'GO!'];
+  ov.style.display = 'flex';
+  let i = 0;
+  const iv = setInterval(() => {
+    txt.textContent = steps[i++];
+    if (i >= steps.length) { clearInterval(iv); ov.style.display = 'none'; }
+  }, 1000);
+}
+
+/* ================= Physics ================= */
+function update(dt) {
+  if (!raceStarted || raceEnded) return;
+  const now = Date.now();
+  if (now < goTime) return;
+  if (me.finished) return;
+
+  const f = dt * 60;
+  const throttle = keys['arrowup'] || keys['w'] || keys['up'];
+  const brake = keys['arrowdown'] || keys['s'] || keys['down'];
+  const left = keys['arrowleft'] || keys['a'] || keys['left'];
+  const right = keys['arrowright'] || keys['d'] || keys['right'];
+
+  const off = minDistToTrack(me.x, me.y) > ROAD_HALF;
+  const maxSp = off ? 3.0 : 6.8;
+  const accel = off ? 0.05 : 0.16;
+
+  if (throttle) {
+    if (me.speed < 0) me.speed = Math.min(me.speed + 0.2 * f, 0);
+    me.speed = Math.min(me.speed + accel * f, maxSp);
+  } else if (brake) {
+    me.speed = me.speed > 0
+      ? Math.max(me.speed - 0.32 * f, 0)
+      : Math.max(me.speed - 0.08 * f, -2.2);
+  } else {
+    me.speed *= Math.pow(off ? 0.88 : 0.972, f);
+  }
+
+  let steer = 0;
+  if (left) steer -= 1;
+  if (right) steer += 1;
+  const turnFactor = Math.min(Math.abs(me.speed) / maxSp, 1) * (off ? 0.4 : 1);
+  me.angle += steer * 0.055 * turnFactor * f;
+
+  me.x += Math.cos(me.angle) * me.speed * f;
+  me.y += Math.sin(me.angle) * me.speed * f;
+
+  const w = TRACK[me.cp];
+  if (Math.hypot(me.x - w[0], me.y - w[1]) < 115) {
+    me.cp++;
+    if (me.cp >= TRACK.length) {
+      me.cp = 0;
+      me.lap++;
+      if (me.lap >= LAPS) finishLocal();
+    }
+  }
+
+  me.time = (now - goTime) / 1000;
+
+  if (!off && Math.abs(steer) > 0 && me.speed > 3.5) {
+    skids.push({ x: me.x - Math.cos(me.angle) * 20, y: me.y - Math.sin(me.angle) * 20, a: me.angle, l: 16 });
+    if (skids.length > 500) skids.shift();
+  }
+  if (off && me.speed > 1) {
+    dust.push({ x: me.x, y: me.y, life: 1 });
+    if (dust.length > 120) dust.shift();
+  }
+  for (const d of dust) d.life -= dt * 1.6;
+}
+
+function finishLocal() {
+  me.finished = true;
+  if (!me.finishSent) {
+    me.finishSent = true;
+    mqttPublish(roomTopic + '/ctrl', { t: 'finish', id: myId, time: me.time });
+    if (racers[myId]) racers[myId].time = me.time;
+    checkRaceEnd();
+  }
+}
+
+function progress(p) {
+  return (p.lap * TRACK.length + p.cp);
+}
+function myRank() {
+  let ahead = 0;
+  for (const id in players) {
+    if (id === myId) continue;
+    const r = players[id];
+    if (r.finished) { ahead++; continue; }
+    if (r.cp !== undefined && progress(r) > progress(me)) ahead++;
+  }
+  return ahead + 1;
+}
+
+/* ================= Network ================= */
+let lastPub = 0;
+function sendState(now) {
+  if (!connected || !roomTopic) return;
+  if (now - lastPub < 33) return;
+  lastPub = now;
+  client.publish(roomTopic + '/state/' + myId, JSON.stringify({ x: me.x, y: me.y, angle: me.angle, lap: me.lap, cp: me.cp }), { qos: 0 });
+}
+
+/* ================= Render ================= */
+const skids = [];
+const dust = [];
+
+function shade(hex, p) {
+  const n = parseInt(hex.slice(1), 16);
+  let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  if (p >= 0) { r += (255 - r) * p; g += (255 - g) * p; b += (255 - b) * p; }
+  else { r *= 1 + p; g *= 1 + p; b *= 1 + p; }
+  return 'rgb(' + Math.round(r) + ',' + Math.round(g) + ',' + Math.round(b) + ')';
+}
+
+function roundRect(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.lineTo(x + w - r, y); c.quadraticCurveTo(x + w, y, x + w, y + r);
+  c.lineTo(x + w, y + h - r); c.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  c.lineTo(x + r, y + h); c.quadraticCurveTo(x, y + h, x, y + h - r);
+  c.lineTo(x, y + r); c.quadraticCurveTo(x, y, x + r, y);
+  c.closePath();
+}
+
+const xs = TRACK.map(p => p[0]), ys = TRACK.map(p => p[1]);
+const MINX = Math.min(...xs) - 600, MAXX = Math.max(...xs) + 600;
+const MINY = Math.min(...ys) - 600, MAXY = Math.max(...ys) + 600;
+
+function makeRnd(seed) {
+  let s = seed;
+  return () => { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; };
+}
+
+const patches = (function () {
+  const rnd = makeRnd(98765);
+  const arr = [];
+  let i = 0;
+  while (arr.length < 420 && i < 5000) {
+    i++;
+    const x = MINX + rnd() * (MAXX - MINX);
+    const y = MINY + rnd() * (MAXY - MINY);
+    if (minDistToTrack(x, y) < ROAD_HALF + 25) continue;
+    arr.push({ x, y, rx: 30 + rnd() * 70, ry: 22 + rnd() * 50, a: rnd() * 6.283, d: rnd() > 0.5 });
+  }
+  return arr;
+})();
+
+const trees = (function () {
+  const rnd = makeRnd(13579);
+  const arr = [];
+  let i = 0;
+  while (arr.length < 150 && i < 5000) {
+    i++;
+    const x = MINX + rnd() * (MAXX - MINX);
+    const y = MINY + rnd() * (MAXY - MINY);
+    if (minDistToTrack(x, y) < ROAD_HALF + 60) continue;
+    arr.push({ x, y, s: 20 + rnd() * 30 });
+  }
+  return arr;
+})();
+
+function drawGrass(w, h) {
+  const grad = ctx.createRadialGradient(w / 2, h / 2, h * 0.2, w / 2, h / 2, h * 0.9);
+  grad.addColorStop(0, '#347d35');
+  grad.addColorStop(1, '#1e5a24');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+}
+
+function drawPatches() {
+  for (const p of patches) {
+    ctx.fillStyle = p.d ? 'rgba(255,255,255,0.045)' : 'rgba(0,0,0,0.06)';
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y, p.rx, p.ry, p.a, 0, 7);
+    ctx.fill();
+  }
+}
+
+function drawTrees() {
+  for (const t of trees) {
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    ctx.beginPath();
+    ctx.ellipse(t.x + 7, t.y + 7, t.s, t.s * 0.75, 0, 0, 7);
+    ctx.fill();
+    ctx.fillStyle = '#285526';
+    ctx.beginPath(); ctx.arc(t.x, t.y, t.s, 0, 7); ctx.fill();
+    ctx.fillStyle = '#3a7a33';
+    ctx.beginPath(); ctx.arc(t.x - t.s * 0.18, t.y - t.s * 0.18, t.s * 0.72, 0, 7); ctx.fill();
+    ctx.fillStyle = '#4d9141';
+    ctx.beginPath(); ctx.arc(t.x - t.s * 0.3, t.y - t.s * 0.34, t.s * 0.34, 0, 7); ctx.fill();
+    ctx.fillStyle = '#5c3b22';
+    ctx.fillRect(t.x - 4, t.y + 2, 8, 12);
+  }
+}
+
+function trackPath() {
+  ctx.beginPath();
+  TRACK.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+  ctx.closePath();
+}
+
+function drawTrack() {
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+  ctx.lineWidth = ROAD_W + 18;
+  trackPath(); ctx.stroke();
+
+  ctx.strokeStyle = '#34383f';
+  ctx.lineWidth = ROAD_W;
+  trackPath(); ctx.stroke();
+
+  ctx.strokeStyle = '#3e434b';
+  ctx.lineWidth = ROAD_W - 6;
+  trackPath(); ctx.stroke();
+
+  ctx.strokeStyle = '#d32f2f';
+  ctx.lineWidth = ROAD_W - 4;
+  ctx.setLineDash([34, 34]);
+  trackPath(); ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.strokeStyle = '#34383f';
+  ctx.lineWidth = ROAD_W - 12;
+  trackPath(); ctx.stroke();
+
+  ctx.strokeStyle = '#f0f0f0';
+  ctx.lineWidth = 5;
+  trackPath(); ctx.stroke();
+  ctx.strokeStyle = '#34383f';
+  ctx.lineWidth = ROAD_W - 10;
+  trackPath(); ctx.stroke();
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+  ctx.lineWidth = 3;
+  ctx.setLineDash([26, 42]);
+  trackPath(); ctx.stroke();
+  ctx.setLineDash([]);
+
+  drawStartLine();
+}
+
+function drawStartLine() {
+  const [sx, sy] = TRACK[0];
+  const [tx, ty] = TRACK[1];
+  let dx = tx - sx, dy = ty - sy;
+  const len = Math.hypot(dx, dy);
+  dx /= len; dy /= len;
+  const half = ROAD_HALF - 8;
+  const sq = 18;
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.rotate(Math.atan2(dy, dx));
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.fillRect(-half - 4, -14, half * 2 + 8, 28);
+  for (let off = -half; off < half; off += sq) {
+    const r = off + sq > half ? half - off : sq;
+    ctx.fillStyle = (Math.floor((off + half) / sq) % 2 === 0) ? '#ffffff' : '#1a1a1a';
+    ctx.fillRect(off, -9, r, 18);
+  }
+  ctx.fillStyle = '#ffd54f';
+  ctx.font = 'bold 11px Segoe UI, Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText('START', 0, -16);
+  ctx.restore();
+}
+
+function drawSkids() {
+  ctx.strokeStyle = 'rgba(20,20,20,0.55)';
+  ctx.lineWidth = 4;
+  ctx.lineCap = 'round';
+  for (const s of skids) {
+    ctx.beginPath();
+    ctx.moveTo(s.x, s.y);
+    ctx.lineTo(s.x - Math.cos(s.a) * s.l, s.y - Math.sin(s.a) * s.l);
+    ctx.stroke();
+  }
+}
+
+function drawDust() {
+  for (const d of dust) {
+    if (d.life <= 0) continue;
+    ctx.fillStyle = 'rgba(190,160,95,' + (d.life * 0.4) + ')';
+    ctx.beginPath();
+    ctx.arc(d.x + (Math.random() - 0.5) * 12, d.y + (Math.random() - 0.5) * 12, 5 + d.life * 9, 0, 7);
+    ctx.fill();
+  }
+}
+
+function drawCar(x, y, angle, color, name, isMe, finished) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+
+  ctx.fillStyle = 'rgba(0,0,0,0.32)';
+  ctx.beginPath();
+  ctx.ellipse(0, 3, 34, 19, 0, 0, 7);
+  ctx.fill();
+
+  const dark = shade(color, -0.45);
+  const light = shade(color, 0.28);
+
+  ctx.fillStyle = '#151515';
+  const wheel = (wx, wy) => {
+    ctx.beginPath(); ctx.ellipse(wx, wy, 7.5, 4.6, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#3a3a3a';
+    ctx.beginPath(); ctx.ellipse(wx, wy, 4.2, 2.6, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#c0c0c0';
+    ctx.beginPath(); ctx.ellipse(wx, wy, 1.7, 1, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#151515';
+  };
+  wheel(-20, -15); wheel(-20, 15); wheel(20, -15); wheel(20, 15);
+
+  ctx.beginPath();
+  ctx.moveTo(-30, -13);
+  ctx.lineTo(22, -13);
+  ctx.quadraticCurveTo(30, -13, 30, 0);
+  ctx.quadraticCurveTo(30, 13, 22, 13);
+  ctx.lineTo(-30, 13);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, -14, 0, 14);
+  grad.addColorStop(0, light);
+  grad.addColorStop(0.5, color);
+  grad.addColorStop(1, dark);
+  ctx.fillStyle = grad;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(255,255,255,0.22)';
+  ctx.fillRect(-30, -4, 60, 8);
+  ctx.fillStyle = 'rgba(0,0,0,0.18)';
+  ctx.fillRect(-30, 4, 60, 3);
+
+  ctx.fillStyle = '#15202c';
+  ctx.beginPath(); ctx.moveTo(-6, -11); ctx.lineTo(15, -11); ctx.lineTo(19, -5); ctx.lineTo(4, -5); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(-6, 11); ctx.lineTo(15, 11); ctx.lineTo(19, 5); ctx.lineTo(4, 5); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = 'rgba(200,230,255,0.5)';
+  ctx.beginPath(); ctx.moveTo(6, -9); ctx.lineTo(13, -9); ctx.lineTo(15, -6); ctx.lineTo(7, -6); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(6, 9); ctx.lineTo(13, 9); ctx.lineTo(15, 6); ctx.lineTo(7, 6); ctx.closePath(); ctx.fill();
+
+  ctx.fillStyle = dark;
+  ctx.fillRect(-34, -14, 8, 28);
+  ctx.fillStyle = shade(color, -0.25);
+  ctx.fillRect(-36, -12, 4, 24);
+
+  ctx.fillStyle = '#fff6cf';
+  ctx.fillRect(28, -9, 3, 6);
+  ctx.fillRect(28, 3, 3, 6);
+  ctx.fillStyle = '#ff3535';
+  ctx.fillRect(-33, -10, 2, 6);
+  ctx.fillRect(-33, 4, 2, 6);
+
+  ctx.restore();
+
+  ctx.font = 'bold 12px Segoe UI, Arial';
+  const tw = ctx.measureText(name).width;
+  ctx.fillStyle = 'rgba(10,14,20,0.72)';
+  roundRect(ctx, x - tw / 2 - 7, y - 33 - 13, tw + 14, 18, 9);
+  ctx.fill();
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center';
+  ctx.fillText(name, x, y - 33);
+
+  if (finished) {
+    ctx.font = 'bold 16px Segoe UI, Arial';
+    ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+    ctx.lineWidth = 3;
+    ctx.strokeText('🏁', x, y + 36);
+    ctx.fillStyle = '#ffd54f';
+    ctx.fillText('🏁', x, y + 36);
+  }
+}
+
+function drawHeadlights() {
+  ctx.save();
+  ctx.translate(me.x, me.y);
+  ctx.rotate(me.angle);
+  const cone = ctx.createRadialGradient(34, 0, 4, 48, 0, 95);
+  cone.addColorStop(0, 'rgba(255,242,180,0.26)');
+  cone.addColorStop(1, 'rgba(255,242,180,0)');
+  ctx.fillStyle = cone;
+  ctx.beginPath();
+  ctx.moveTo(30, -7);
+  ctx.lineTo(115, -28);
+  ctx.lineTo(115, 28);
+  ctx.lineTo(30, 7);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function render() {
+  const w = window.innerWidth, h = window.innerHeight;
+  drawGrass(w, h);
+
+  const spd = Math.abs(me.speed);
+  const maxSp = 6.8;
+  const zoom = 1.06 - (spd / maxSp) * 0.13;
+  let shx = 0, shy = 0;
+  if (raceStarted && !me.finished && spd > 4) {
+    const a = (spd - 4) / 3 * 1.8;
+    shx = (Math.random() - 0.5) * a;
+    shy = (Math.random() - 0.5) * a;
+  }
+  camX += (me.x - camX) * 0.12;
+  camY += (me.y - camY) * 0.12;
+
+  ctx.save();
+  ctx.translate(w / 2 + shx, h / 2 + shy);
+  ctx.scale(zoom, zoom);
+  ctx.translate(-camX, -camY);
+
+  drawPatches();
+  drawTrees();
+  drawTrack();
+  drawSkids();
+  drawDust();
+
+  for (const id in players) {
+    const r = players[id];
+    if (id === myId) continue;
+    if (r.x === 0 && r.y === 0) continue;
+    drawCar(r.x, r.y, r.angle || 0, r.color, r.name, false, r.finished);
+  }
+  if (raceStarted && !me.finished) drawHeadlights();
+  drawCar(me.x, me.y, me.angle, myColor, myName, true, me.finished);
+
+  ctx.restore();
+
+  if (raceStarted && !me.finished && spd > maxSp * 0.72) {
+    const alpha = Math.min(0.22, (spd / maxSp - 0.72) * 1.4);
+    ctx.strokeStyle = 'rgba(255,255,255,' + alpha + ')';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 16; i++) {
+      const ang = (i / 16) * 6.283 + (Math.random() - 0.5) * 0.3;
+      const r1 = 70 + Math.random() * 30;
+      const r2 = r1 + 130;
+      ctx.beginPath();
+      ctx.moveTo(w / 2 + Math.cos(ang) * r1, h / 2 + Math.sin(ang) * r1);
+      ctx.lineTo(w / 2 + Math.cos(ang) * r2, h / 2 + Math.sin(ang) * r2);
+      ctx.stroke();
+    }
+  }
+
+  const vg = ctx.createRadialGradient(w / 2, h / 2, h * 0.45, w / 2, h / 2, h * 0.95);
+  vg.addColorStop(0, 'rgba(0,0,0,0)');
+  vg.addColorStop(1, 'rgba(0,0,0,0.38)');
+  ctx.fillStyle = vg;
+  ctx.fillRect(0, 0, w, h);
+
+  hudUpdate();
+}
+
+function hudUpdate() {
+  document.getElementById('hudLap').textContent = Math.min(me.lap + 1, LAPS) + ' / ' + LAPS;
+  document.getElementById('hudPos').textContent = myRank() + ' / ' + Object.keys(players).length;
+  document.getElementById('hudTime').textContent = me.time.toFixed(1) + 's';
+}
+
+/* ================= Results ================= */
+function showResults(standings, title) {
+  raceEnded = true;
+  const ov = document.getElementById('results');
+  document.getElementById('resTitle').textContent = title || '🏁 FINISH';
+  const list = document.getElementById('resList');
+  list.innerHTML = standings.map((p, i) =>
+    '<div style="padding:8px 10px; margin:4px 0; background:#121a26; border-radius:8px; display:flex; justify-content:space-between">' +
+    '<span><b>' + (i + 1) + '.</b> <span style="color:' + p.color + '">●</span> ' + p.name + '</span>' +
+    '<b>' + p.time.toFixed(1) + 's</b></div>'
+  ).join('');
+  ov.style.display = 'flex';
+}
+
+/* ================= Main loop ================= */
+const STEP = 1000 / 60;
+let acc = 0, last = performance.now();
+
+function loop(now) {
+  requestAnimationFrame(loop);
+  let dt = now - last;
+  last = now;
+  if (dt > 100) dt = 100;
+  acc += dt;
+  while (acc >= STEP) {
+    update(STEP / 1000);
+    acc -= STEP;
+  }
+  render();
+  if (raceStarted && !raceEnded && !me.finished) sendState(now);
+}
+requestAnimationFrame(loop);
+
+/* ================= Menu logic ================= */
+const nameInput = document.getElementById('nameInput');
+nameInput.value = localStorage.getItem('sr_name') || '';
+
+function getLink() {
+  return location.origin + location.pathname + '#room=' + roomCode;
+}
+
+function defaultName() {
+  return nameInput.value.trim() || 'Player' + Math.floor(Math.random() * 90 + 10);
+}
+
+document.getElementById('createBtn').addEventListener('click', () => {
+  const name = defaultName();
+  localStorage.setItem('sr_name', name);
+  myName = name;
+  myColor = colorForId(myId);
+  roomCode = genCode(5);
+  isHost = true;
+  document.getElementById('err').textContent = '';
+  connectMqtt();
+});
+
+document.getElementById('joinBtn').addEventListener('click', () => {
+  const code = document.getElementById('roomInput').value.trim().toUpperCase();
+  if (!code) { document.getElementById('err').textContent = 'Room code likhein.'; return; }
+  joinRoom(code);
+});
+
+function joinRoom(code) {
+  const name = defaultName();
+  localStorage.setItem('sr_name', name);
+  myName = name;
+  myColor = colorForId(myId);
+  roomCode = code;
+  isHost = false;
+  document.getElementById('err').textContent = '';
+  connectMqtt();
+}
+
+document.getElementById('copyBtn').addEventListener('click', () => {
+  const link = getLink();
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(link);
+  } else {
+    const ta = document.createElement('textarea');
+    ta.value = link;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  }
+  const b = document.getElementById('copyBtn');
+  b.textContent = 'Copied!';
+  setTimeout(() => b.textContent = 'Copy Link', 1500);
+});
+
+document.getElementById('startBtn').addEventListener('click', () => {
+  if (!connected || !roomTopic) return;
+  const startTs = Date.now();
+  mqttPublish(roomTopic + '/ctrl', { t: 'start', id: myId, start: startTs });
+  if (!raceStarted) startRace(startTs);
+  document.getElementById('startBtn').style.display = 'none';
+});
+
+const hashRoom = (location.hash.match(/room=([A-Za-z0-9]{4,6})/) || [])[1];
+if (hashRoom) {
+  document.getElementById('roomInput').value = hashRoom.toUpperCase();
+  joinRoom(hashRoom.toUpperCase());
+}
+
+})();
+</script>
+</body>
+</html>
